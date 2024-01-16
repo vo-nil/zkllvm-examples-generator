@@ -1,47 +1,26 @@
-/*
 #include <nil/crypto3/hash/algorithm/hash.hpp>
 #include <nil/crypto3/hash/poseidon.hpp>
+#include <nil/crypto3/algebra/curves/pallas.hpp>
 
 using namespace nil::crypto3;
 using namespace nil::crypto3::algebra::curves;
-*/
-#include <cstddef>
-#include <vector>
-#include <iostream>
 
-//using value_type = typename pallas::base_field_type::value_type;
-using value_type = size_t;
-using value_vector = std::vector<value_type>;
-using vv_it = typename value_vector::iterator;
+using value_type = typename pallas::base_field_type::value_type;
 
-value_type mock_hash(value_type a, value_type b)
+template<std::size_t size>
+value_type evaluate_root(
+        typename std::array<value_type, size>::iterator begin,
+        typename std::array<value_type, size>::iterator end,
+        std::size_t distance)
 {
-    return a+b;
-}
-
-void print_array(vv_it begin, vv_it end, size_t stride = 1)
-{
-    std::cout << "stride = " << stride << " [ ";
-    for(vv_it i = begin; i != end; i += stride) {
-        std::cout << *i << " ";
-    }
-    std::cout << "]" << std::endl;
-}
-
-value_type evaluate_root(vv_it begin, vv_it end)
-{
-    size_t distance = end-begin;
-    size_t stride = 1;
+    std::size_t stride = 1;
 
     while (stride < distance) {
-        print_array(begin, end, stride);
-        for(vv_it i = begin; i != end; i += stride) {
-            //*i = hash<hashes::poseidon>(*i, *(i+stride));
-            *i = mock_hash(*i, *(i+stride));
+        for(auto i = begin; i != end; i += stride) {
+            *i = hash<hashes::poseidon>(*i, *(i+stride));
         }
         stride *= 2;
     }
-
     return *begin;
 }
 
@@ -52,32 +31,22 @@ value_type evaluate_root(vv_it begin, vv_it end)
  * total provers: {{ prover_count }}
  */
 
-[[circuit]] bool merkle_tree_poseidon (
-    value_type expected_root,
-    [[private_input]] value_vector layer0)
+[[circuit]] value_type merkle_tree_poseidon (
+    [[private_input]] std::array<value_type, {{witness_count}}> layer0)
 {
     
-    vv_it begin;
-
     {% for layer in layers %}
     {% include 'onelayer.cpp' %}
     {% endfor %}
 
     /* Last layer can be evaluated with one prover */
-    begin = layer{{total_layers}}.begin();
-    value_type result = evaluate_root(begin, begin + {{last_layer_size}});
+    value_type result;
+#pragma zk_multi_prover {{ prover_count }} 
+    {
+        auto begin = layer{{total_layers}}.begin();
+        result = evaluate_root<{{last_layer_size}}>(begin, begin + {{last_layer_size}}, {{last_layer_size}});
+    }
      
-    return (result == expected_root);
+    return result;
 }
 
-int main()
-{
-    size_t n = {{ witness_count }};
-    value_vector x(n);
-    fill(x.begin(), x.end(), 1);
-
-    bool result = merkle_tree_poseidon(1024, x);
-
-    std::cout << "result: " << result << std::endl;
-    return 0;
-}

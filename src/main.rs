@@ -4,7 +4,7 @@ use pasta_curves::Fp;
 use ff::Field;
 use generic_array::typenum::U8;
 
-use serde::Serialize;
+use serde::{ser::{self, SerializeStruct}, Serialize, Serializer};
 use clap::Parser;
 
 use log::{info, debug};
@@ -13,8 +13,10 @@ use std::fs;
 #[derive(Serialize, Debug)]
 pub struct LayerConfig {
     prev_layer: usize,
+    prev_layer_size: usize,
     layer_number: usize,
     layer_size: usize,
+    prover_base: usize,
     layer_leaves: Vec<usize>,
 }
 
@@ -53,26 +55,76 @@ fn build_config(witness_count: usize, per_prover: usize) -> Config {
 
     let mut current_layer_size = witness_count;
     let mut prev_layer = 0;
+    let mut provers = 0;
+    let mut prev_layer_size = witness_count;
     
-    while current_layer_size >= per_prover {
+    while current_layer_size > per_prover {
         layers.push( LayerConfig {
             prev_layer,
+            prev_layer_size,
             layer_number: prev_layer + 1,
             layer_size: current_layer_size / per_prover,
+            prover_base: provers,
             layer_leaves: vec![1; current_layer_size / per_prover]
         });
         current_layer_size = current_layer_size / per_prover;
         prev_layer = prev_layer + 1;
+        prev_layer_size = current_layer_size;
+        provers = provers + current_layer_size;
     }
 
     Config {
         witness_count,
         per_prover,
-        prover_count: witness_count / per_prover,
+        prover_count: provers,
         layers,
         total_layers: prev_layer,
         last_layer_size: current_layer_size
     }
+}
+
+/*
+fn ser_vector_fp<S>(v: &Vec<Fp>, serializer: S) -> Result<S::Ok, S::Error>
+    where S: Serializer
+{
+    use serde::ser::{SerializeSeq, SerializeStruct};
+    let mut seq = serializer.serialize_seq(Some(v.len()))?;
+    for x in v {
+        let mut state = seq.serialize_struct("field", 1)?;
+        let value = format!("{:?}", x);
+        state.serialize_field("field", &value)?;
+        state.end()?;
+    }
+    seq.end()
+}
+*/
+
+#[derive(Debug)]
+struct MyFp(Fp);
+
+impl Serialize for MyFp {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer {
+
+            let mut state = serializer.serialize_struct("field", 1)?;
+            let value = format!("{:?}", self.0);
+            state.serialize_field("field", &value)?;
+            state.end()
+    }
+}
+
+#[derive(Serialize, Debug)]
+enum OneInput {
+    #[serde(rename = "field")]
+    Field(MyFp),
+    #[serde(rename = "array")]
+    Vector(Vec<MyFp>),
+}
+
+#[derive(Serialize, Debug)]
+struct Input {
+    inputs: Vec<OneInput>,
 }
 
 fn main() {
@@ -92,10 +144,25 @@ fn main() {
     /* generate circuit */
     let circuit = tmpl.render(&config).unwrap();
     let circuit_filename = format!("{0}.cpp", args.circuit);
-    fs::write(circuit_filename, circuit).unwrap();
-    info!("Circuit saved to {0}.cpp", args.circuit);
+    fs::write(&circuit_filename, circuit).unwrap();
+    info!("Circuit saved to {}", &circuit_filename);
 
-    /* generate inputs */
+
+    let private_input : Vec<OneInput> = vec![
+        OneInput::Vector(vec![1;witness_count].into_iter()
+        .map(|x| MyFp(x.into())).collect())];
+
+    let pi_str = serde_json::to_string_pretty(&private_input).unwrap();
+    let private_input_filename = format!("{}_private.inp", args.circuit);
+    fs::write(&private_input_filename, pi_str).unwrap();
+    info!("Private input saved to {}", &private_input_filename);
+
+    let public_input_filename = format!("{}_public.inp", args.circuit);
+    fs::write(&public_input_filename, "[]").unwrap();
+    info!("Public input saved to {}", &public_input_filename);
+
+
+    /* generate inputs 
     let witness = vec![1; witness_count];
     let consts : PoseidonConstants::<Fp, U8> = PoseidonConstants::new();
     let mut poseidon = Poseidon::<Fp, U8>::new(&consts);
@@ -106,6 +173,7 @@ fn main() {
     let res = poseidon.hash();
 
     info!("hash: {:?}", res);
+    */
 
 
 
