@@ -4,7 +4,7 @@ use pasta_curves::Fp;
 use ff::Field;
 use generic_array::typenum::U8;
 
-use serde::{ser::{self, SerializeStruct}, Serialize, Serializer};
+use serde::{ser::{self, SerializeStruct, SerializeSeq}, Serialize, Serializer};
 use clap::Parser;
 
 use log::{info, debug};
@@ -20,8 +20,23 @@ pub struct LayerConfig {
     layer_leaves: Vec<usize>,
 }
 
+#[derive(clap::ValueEnum, Clone, Serialize, Debug, Default)]
+enum HashFunction {
+    #[default]
+    Poseidon,
+    Sha2_256,
+    Sha2_512,
+}
+
+impl std::fmt::Display for HashFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", format!("{:?}", self).to_lowercase())
+    }
+}
+
 #[derive(Serialize, Debug)]
 pub struct Config {
+    hash_function: String,
     witness_count: usize,
     per_prover: usize,
     prover_count: usize,
@@ -31,8 +46,9 @@ pub struct Config {
 }
 
 /// zkLLVM circuit generator for multiple provers testing
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Serialize)]
 #[command(author, version, about, long_about = None)]
+#[serde(rename_all = "lowercase")]
 struct Args {
     /// Circuit basename (circuit will be saved to 'circuit.cpp' and inputs will be
     /// 'circuit_private.inp' and 'circuit_public.inp')
@@ -40,49 +56,59 @@ struct Args {
     circuit: String,
 
     /// Total number of leaves
-    #[arg(short, long, default_value_t = 1024)]
+    #[arg(short, long, default_value_t = 16)]
     leaves: usize,
 
     /// Prover capacity - maximum number of leaves per prover
-    #[arg(short, long, default_value_t = 16)]
-    prover_capacity: usize
+    #[arg(short, long, default_value_t = 4)]
+    prover_capacity: usize,
+
+    /// Hash function. 
+    #[arg(short='H', long, default_value_t = HashFunction::Poseidon)]
+    hash_function: HashFunction,
 }
 
 
-fn build_config(witness_count: usize, per_prover: usize) -> Config {
+fn build_config(args: &Args) -> Config {
 
     let mut layers = vec![];
 
-    let mut current_layer_size = witness_count;
+    let mut current_layer_size = args.leaves;
     let mut prev_layer = 0;
     let mut provers = 0;
-    let mut prev_layer_size = witness_count;
+    let mut prev_layer_size = args.leaves;
     
-    while current_layer_size > per_prover {
+    while current_layer_size > args.prover_capacity {
         layers.push( LayerConfig {
             prev_layer,
             prev_layer_size,
             layer_number: prev_layer + 1,
-            layer_size: current_layer_size / per_prover,
+            layer_size: current_layer_size / args.prover_capacity,
             prover_base: provers,
-            layer_leaves: vec![1; current_layer_size / per_prover]
+            layer_leaves: vec![1; current_layer_size / args.prover_capacity]
         });
-        current_layer_size = current_layer_size / per_prover;
+        current_layer_size = current_layer_size / args.prover_capacity;
         prev_layer = prev_layer + 1;
         prev_layer_size = current_layer_size;
         provers = provers + current_layer_size;
     }
 
+    let hash_function = match args.hash_function {
+        HashFunction::Poseidon => "hashes::poseidon",
+        HashFunction::Sha2_256 => "hashes::sha2<256>",
+        HashFunction::Sha2_512 => "hashes::sha2<512>",
+    };
+
     Config {
-        witness_count,
-        per_prover,
+        hash_function: hash_function.to_string(),
+        witness_count: args.leaves,
+        per_prover: args.prover_capacity,
         prover_count: provers,
         layers,
         total_layers: prev_layer,
         last_layer_size: current_layer_size
     }
 }
-
 /*
 fn ser_vector_fp<S>(v: &Vec<Fp>, serializer: S) -> Result<S::Ok, S::Error>
     where S: Serializer
@@ -98,15 +124,26 @@ fn ser_vector_fp<S>(v: &Vec<Fp>, serializer: S) -> Result<S::Ok, S::Error>
     seq.end()
 }
 */
+/*
+fn serialize_fp<S>(&T, S) -> Result<S::Ok, S::Error> where S: Serializer
+*/
 
 #[derive(Debug)]
 struct MyFp(Fp);
 
+#[derive(Debug, Serialize)]
+enum ValueType {
+    #[serde(rename = "vector")]
+    Vector(Vec<MyFp>),
+    #[serde(rename = "field", untagged)]
+    Field(MyFp),
+}
+
 impl Serialize for MyFp {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: Serializer {
-
+        S: Serializer 
+    {
             let mut state = serializer.serialize_struct("field", 1)?;
             let value = format!("{:?}", self.0);
             state.serialize_field("field", &value)?;
@@ -116,10 +153,8 @@ impl Serialize for MyFp {
 
 #[derive(Serialize, Debug)]
 enum OneInput {
-    #[serde(rename = "field")]
-    Field(MyFp),
     #[serde(rename = "array")]
-    Vector(Vec<MyFp>),
+    Vector(Vec<ValueType>),
 }
 
 #[derive(Serialize, Debug)]
@@ -135,10 +170,7 @@ fn main() {
     
     let args = Args::parse();
 
-    let witness_count = args.leaves;
-    let per_prover = args.prover_capacity;
-
-    let config = build_config( witness_count, per_prover);
+    let config = build_config(&args);
     debug!("Circuit config: {:?}", config);
 
     /* generate circuit */
@@ -148,17 +180,29 @@ fn main() {
     info!("Circuit saved to {}", &circuit_filename);
 
 
-    let private_input : Vec<OneInput> = vec![
-        OneInput::Vector(vec![1;witness_count].into_iter()
-        .map(|x| MyFp(x.into())).collect())];
+    let private_input : Vec<OneInput> = match args.hash_function {
+        HashFunction::Poseidon => {
+            vec![
+                OneInput::Vector((1..args.leaves as u64+1)
+                    .map(|x| ValueType::Field(MyFp(x.into()))).collect())]
+        },
+        _ => {
+            vec![
+                OneInput::Vector((1..args.leaves as u64+1)
+                    .map(|x| ValueType::Vector(vec![MyFp(0.into()), MyFp(x.into())])).collect())]
+        }
+    };
 
-    let pi_str = serde_json::to_string_pretty(&private_input).unwrap();
+    let private_input_str = serde_json::to_string_pretty(&private_input).unwrap();
     let private_input_filename = format!("{}_private.inp", args.circuit);
-    fs::write(&private_input_filename, pi_str).unwrap();
+    fs::write(&private_input_filename, &private_input_str).unwrap();
     info!("Private input saved to {}", &private_input_filename);
 
+    let public_input : Vec<OneInput> = vec![];
+
+    let public_input_str = serde_json::to_string_pretty(&public_input).unwrap();
     let public_input_filename = format!("{}_public.inp", args.circuit);
-    fs::write(&public_input_filename, "[]").unwrap();
+    fs::write(&public_input_filename, &public_input_str).unwrap();
     info!("Public input saved to {}", &public_input_filename);
 
 

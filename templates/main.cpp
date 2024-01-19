@@ -1,11 +1,12 @@
 #include <nil/crypto3/hash/algorithm/hash.hpp>
 #include <nil/crypto3/hash/poseidon.hpp>
+#include <nil/crypto3/hash/sha2.hpp>
 #include <nil/crypto3/algebra/curves/pallas.hpp>
 
 using namespace nil::crypto3;
 using namespace nil::crypto3::algebra::curves;
 
-using value_type = typename pallas::base_field_type::value_type;
+using value_type = typename {{hash_function}}::block_type;
 
 template<std::size_t size>
 value_type evaluate_root(
@@ -17,7 +18,7 @@ value_type evaluate_root(
 
     while (stride < distance) {
         for(auto i = begin; i != end; i += stride) {
-            *i = hash<hashes::poseidon>(*i, *(i+stride));
+            *i = hash<{{hash_function}}>(*i, *(i+stride));
         }
         stride *= 2;
     }
@@ -31,7 +32,7 @@ value_type evaluate_root(
  * total provers: {{ prover_count }}
  */
 
-[[circuit]] value_type merkle_tree_poseidon (
+[[circuit]] value_type merkle_tree (
     [[private_input]] std::array<value_type, {{witness_count}}> layer0)
 {
     
