@@ -1,10 +1,12 @@
-use minijinja::{context, path_loader, Environment, Error, ErrorKind};
-use neptune::poseidon::{PoseidonConstants, Poseidon};
+use minijinja::{path_loader, Environment};
+
 use pasta_curves::Fp;
+/*
+use neptune::poseidon::{PoseidonConstants, Poseidon};
 use ff::Field;
 use generic_array::typenum::U8;
-
-use serde::{ser::{self, SerializeStruct, SerializeSeq}, Serialize, Serializer};
+*/
+use serde::{ser::SerializeStruct, Serialize, Serializer};
 use clap::Parser;
 
 use log::{info, debug};
@@ -109,24 +111,6 @@ fn build_config(args: &Args) -> Config {
         last_layer_size: current_layer_size
     }
 }
-/*
-fn ser_vector_fp<S>(v: &Vec<Fp>, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer
-{
-    use serde::ser::{SerializeSeq, SerializeStruct};
-    let mut seq = serializer.serialize_seq(Some(v.len()))?;
-    for x in v {
-        let mut state = seq.serialize_struct("field", 1)?;
-        let value = format!("{:?}", x);
-        state.serialize_field("field", &value)?;
-        state.end()?;
-    }
-    seq.end()
-}
-*/
-/*
-fn serialize_fp<S>(&T, S) -> Result<S::Ok, S::Error> where S: Serializer
-*/
 
 #[derive(Debug)]
 struct MyFp(Fp);
@@ -142,7 +126,7 @@ enum ValueType {
 impl Serialize for MyFp {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: Serializer 
+        S: Serializer
     {
             let mut state = serializer.serialize_struct("field", 1)?;
             let value = format!("{:?}", self.0);
