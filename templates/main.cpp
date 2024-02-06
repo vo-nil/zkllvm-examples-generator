@@ -17,7 +17,7 @@ value_type evaluate_root(
     std::size_t stride = 1;
 
     while (stride < distance) {
-        for(auto i = begin; i != end; i += stride) {
+        for(auto i = begin; i != end; i += 2*stride) {
             *i = hash<{{hash_function}}>(*i, *(i+stride));
         }
         stride *= 2;
