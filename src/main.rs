@@ -22,6 +22,15 @@ pub struct LayerConfig {
     layer_leaves: Vec<usize>,
 }
 
+#[derive(Serialize,Debug)]
+pub struct EvaluateRootConfig {
+    size: usize,
+    begin: usize,
+    end: usize,
+    distance: usize,
+    strides: Vec<usize>,
+}
+
 #[derive(clap::ValueEnum, Clone, Serialize, Debug, Default)]
 enum HashFunction {
     #[default]
@@ -45,6 +54,7 @@ pub struct Config {
     total_layers: usize,
     last_layer_size: usize,
     layers : Vec<LayerConfig>,
+    evaluate_roots: Vec<EvaluateRootConfig>,
 }
 
 /// zkLLVM circuit generator for multiple provers testing
@@ -65,7 +75,7 @@ struct Args {
     #[arg(short, long, default_value_t = 4)]
     prover_capacity: usize,
 
-    /// Hash function. 
+    /// Hash function.
     #[arg(short='H', long, default_value_t = HashFunction::Poseidon)]
     hash_function: HashFunction,
 }
@@ -74,12 +84,13 @@ struct Args {
 fn build_config(args: &Args) -> Config {
 
     let mut layers = vec![];
+    let mut evaluate_roots = vec![];
 
     let mut current_layer_size = args.leaves;
     let mut prev_layer = 0;
     let mut provers = 0;
     let mut prev_layer_size = args.leaves;
-    
+
     while current_layer_size > args.prover_capacity {
         layers.push( LayerConfig {
             prev_layer,
@@ -89,6 +100,22 @@ fn build_config(args: &Args) -> Config {
             prover_base: provers,
             layer_leaves: vec![1; current_layer_size / args.prover_capacity]
         });
+
+        let mut strides = vec![];
+        let mut stride = 1;
+        while stride < args.prover_capacity {
+            strides.push(stride);
+            stride *= 2;
+        }
+        for index in 0..current_layer_size / args.prover_capacity {
+            evaluate_roots.push( EvaluateRootConfig {
+                size: current_layer_size,
+                begin: index*args.prover_capacity,
+                end: (index+1)*args.prover_capacity,
+                distance: args.prover_capacity,
+                strides: strides.clone(),
+            });
+        }
         current_layer_size = current_layer_size / args.prover_capacity;
         prev_layer = prev_layer + 1;
         prev_layer_size = current_layer_size;
@@ -101,12 +128,28 @@ fn build_config(args: &Args) -> Config {
         HashFunction::Sha2_512 => "hashes::sha2<512>",
     };
 
+    let mut strides = vec![];
+    let mut stride = 1;
+    while stride < current_layer_size {
+        strides.push(stride);
+        stride *= 2;
+    }
+
+    evaluate_roots.push( EvaluateRootConfig {
+        size: current_layer_size,
+        begin: 0,
+        end: current_layer_size,
+        distance: current_layer_size,
+        strides,
+    });
+
     Config {
         hash_function: hash_function.to_string(),
         witness_count: args.leaves,
         per_prover: args.prover_capacity,
         prover_count: provers,
         layers,
+        evaluate_roots,
         total_layers: prev_layer,
         last_layer_size: current_layer_size
     }
@@ -151,7 +194,7 @@ fn main() {
     let mut env = Environment::new();
     env.set_loader(path_loader("templates"));
     let tmpl = env.get_template("main.cpp").unwrap();
-    
+
     let args = Args::parse();
 
     let config = build_config(&args);
@@ -190,7 +233,7 @@ fn main() {
     info!("Public input saved to {}", &public_input_filename);
 
 
-    /* generate inputs 
+    /* generate inputs
     let witness = vec![1; witness_count];
     let consts : PoseidonConstants::<Fp, U8> = PoseidonConstants::new();
     let mut poseidon = Poseidon::<Fp, U8>::new(&consts);
